@@ -22,28 +22,57 @@ except ModuleNotFoundError:
 class WandbLogWriter(SummaryWriter, LogWriter):
     """Summary writer for W&B."""
 
-    def __init__(self, log_dir: str, project_name: str) -> None:
-        """Initialize a W&B run for logging."""
+    def __init__(
+        self,
+        log_dir: str,
+        project_name: str,
+        run_name: str | None = None,
+        group: str | None = None,
+        tags: list[str] | tuple[str, ...] | None = None,
+        notes: str | None = None,
+        entity: str | None = None,
+        wandb_dir: str | None = None,
+    ) -> None:
+        """Initialize a W&B run for logging.
+
+        Args:
+            log_dir: The rsl_rl run directory (checkpoints, tensorboard, videos).
+            project_name: The W&B project.
+            run_name: W&B run display name. If ``None`` (default), W&B auto-generates
+                its own random name (e.g. "stellar-dawn-7") rather than reusing the
+                ``log_dir`` basename.
+            group: W&B run group, for grouping related runs together.
+            tags: W&B run tags.
+            notes: Free-text notes attached to the W&B run.
+            entity: W&B entity (team/user). Falls back to ``$WANDB_ENTITY`` then
+                ``$WANDB_USERNAME`` when ``None``.
+            wandb_dir: Directory for W&B's own local run files (``wandb.init(dir=...)``).
+                Independent of ``log_dir``.
+        """
         if wandb is None:
             raise ModuleNotFoundError("wandb package is required to log to Weights and Biases.")
         super().__init__(log_dir, flush_secs=10)
 
-        # Get the run name
-        run_name = os.path.split(log_dir)[-1]
-
-        try:
-            entity = os.environ["WANDB_USERNAME"]
-        except KeyError:
-            entity = None
-
-        # Initialize wandb
-        wandb.init(
-            project=project_name,
-            entity=entity,
-            name=run_name,
-            config={"log_dir": log_dir},
-            settings=wandb.Settings(start_method="thread"),
-        )
+        if wandb.run is not None:
+            # A run was already started by the caller (e.g. a training launcher that needs
+            # the generated run name to build ``log_dir`` before the runner exists). Reuse
+            # it rather than starting a second run; just record the resolved log_dir.
+            wandb.config.update({"log_dir": log_dir}, allow_val_change=True)
+        else:
+            if entity is None:
+                entity = os.environ.get("WANDB_ENTITY") or os.environ.get("WANDB_USERNAME")
+            # name=None lets W&B pick its default random run name.
+            wandb.init(
+                project=project_name,
+                entity=entity,
+                name=run_name,
+                group=group,
+                tags=list(tags) if tags else None,
+                notes=notes,
+                dir=wandb_dir,
+                config={"log_dir": log_dir},
+                settings=wandb.Settings(start_method="thread"),
+            )
 
         # Initialize set to keep track of logged videos
         self.logged_videos: set[str] = set()
