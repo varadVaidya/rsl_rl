@@ -11,9 +11,10 @@ import copy
 import tempfile
 import torch
 from tensordict import TensorDict
+from unittest.mock import Mock
 
 from rsl_rl.env import VecEnv
-from rsl_rl.runners import OnPolicyRunner
+from rsl_rl.runners import DistillationRunner, OnPolicyRunner
 
 NUM_ENVS = 4
 OBS_DIM = 8
@@ -48,6 +49,23 @@ class DummyEnv(VecEnv):
         rewards = torch.randn(self.num_envs, device=self.device)
         extras = {"time_outs": torch.zeros(self.num_envs, device=self.device)}
         return obs, rewards, dones, extras
+
+
+class StatefulRunner(OnPolicyRunner):
+    """Runner test double with checkpointable environment state."""
+
+    def __init__(self, env: VecEnv, train_cfg: dict) -> None:
+        """Initialize a runner with mutable environment state."""
+        self.env_state = {"counter": 1}
+        super().__init__(env, train_cfg, device="cpu")
+
+    def get_env_state(self) -> dict:
+        """Return a copy of the mutable test state."""
+        return self.env_state.copy()
+
+    def load_env_state(self, state: dict) -> None:
+        """Restore the mutable test state."""
+        self.env_state = state.copy()
 
 
 def _make_train_cfg(model_type: str = "mlp") -> dict:
@@ -124,6 +142,18 @@ def _make_train_cfg(model_type: str = "mlp") -> dict:
             "activation": "elu",
         }
     return cfg
+
+
+def _make_distillation_cfg() -> dict:
+    """Return a minimal distillation configuration."""
+    return {
+        "num_steps_per_env": 8,
+        "save_interval": 100,
+        "obs_groups": {"student": ["policy"], "teacher": ["policy"]},
+        "algorithm": {"class_name": "Distillation", "gradient_length": 4},
+        "student": {"class_name": "MLPModel", "hidden_dims": [32, 32]},
+        "teacher": {"class_name": "MLPModel", "hidden_dims": [32, 32]},
+    }
 
 
 def _build_runner(log_dir: str | None = None, model_type: str = "mlp") -> OnPolicyRunner:
@@ -238,6 +268,46 @@ class TestSaveLoad:
 
             for key, param in runner2.alg.actor.state_dict().items():
                 assert torch.equal(saved_state[key], param), f"Normalization stat '{key}' not restored after load"
+
+    def test_save_and_load_environment_state(self) -> None:
+        """Runner hooks round-trip environment state alongside existing infos."""
+        runner = StatefulRunner(DummyEnv(), _make_train_cfg())
+
+        with tempfile.NamedTemporaryFile(suffix=".pt") as f:
+            runner.save(f.name, infos={"note": "kept"})
+            checkpoint = torch.load(f.name, weights_only=False, map_location="cpu")
+            assert checkpoint["infos"] == {"note": "kept", "env_state": {"counter": 1}}
+
+            runner.env_state["counter"] = 2
+            runner.load(f.name)
+            assert runner.env_state == {"counter": 1}
+
+    def test_load_without_environment_state_is_a_no_op(self) -> None:
+        """Checkpoints without optional state leave a stateful runner untouched."""
+        legacy_runner = _build_runner()
+        runner = StatefulRunner(DummyEnv(), _make_train_cfg())
+        runner.env_state["counter"] = 2
+
+        with tempfile.NamedTemporaryFile(suffix=".pt") as f:
+            legacy_runner.save(f.name)
+            runner.load(f.name)
+
+        assert runner.env_state == {"counter": 2}
+
+    def test_distillation_runner_uses_environment_state_hooks(self) -> None:
+        """DistillationRunner inherits the same environment-state checkpoint path."""
+        runner = DistillationRunner(DummyEnv(), _make_distillation_cfg(), device="cpu")
+        state = {"counter": 1}
+        load_env_state = Mock()
+        runner.get_env_state = lambda: state.copy()
+        runner.load_env_state = load_env_state
+
+        with tempfile.NamedTemporaryFile(suffix=".pt") as f:
+            runner.save(f.name)
+            state["counter"] = 2
+            runner.load(f.name)
+
+        load_env_state.assert_called_once_with({"counter": 1})
 
 
 class TestInferencePolicy:

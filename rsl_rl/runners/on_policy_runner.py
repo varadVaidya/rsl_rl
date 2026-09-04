@@ -135,6 +135,9 @@ class OnPolicyRunner:
 
     def save(self, path: str, infos: dict | None = None) -> None:
         """Save the models and training state to a given path and upload them if external logging is used."""
+        env_state = self.get_env_state()
+        if env_state is not None:
+            infos = {**(infos or {}), "env_state": env_state}
         saved_dict = self.alg.save()
         saved_dict["iter"] = self.current_learning_iteration
         saved_dict["infos"] = infos
@@ -158,7 +161,18 @@ class OnPolicyRunner:
         load_iteration = self.alg.load(loaded_dict, load_cfg, strict)
         if load_iteration:
             self.current_learning_iteration = loaded_dict["iter"]
-        return loaded_dict["infos"]
+        infos = loaded_dict["infos"]
+        if infos and (env_state := infos.get("env_state")) is not None:
+            self.load_env_state(env_state)
+        return infos
+
+    def get_env_state(self) -> dict | None:
+        """Return optional environment state for checkpoints."""
+        return None
+
+    def load_env_state(self, state: dict) -> None:
+        """Restore optional environment state from a checkpoint."""
+        pass
 
     def get_inference_policy(self, device: str | None = None) -> MLPModel:
         """Return the policy on the requested device for inference."""
