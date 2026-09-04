@@ -214,6 +214,18 @@ class TestSaveLoad:
             data = torch.load(f.name, weights_only=False, map_location="cpu")
             assert "iter" in data
 
+    def test_save_respects_upload_model_flag(self) -> None:
+        """Local checkpoints need not be uploaded by a logging backend."""
+        cfg = _make_train_cfg()
+        cfg["upload_model"] = False
+        runner = OnPolicyRunner(DummyEnv(), cfg, device="cpu")
+        runner.logger.save_model = Mock()
+
+        with tempfile.NamedTemporaryFile(suffix=".pt") as f:
+            runner.save(f.name)
+
+        runner.logger.save_model.assert_not_called()
+
     def test_load_restores_parameters(self) -> None:
         """Loading a checkpoint should restore model parameters exactly."""
         runner = _build_runner()

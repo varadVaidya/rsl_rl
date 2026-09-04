@@ -143,7 +143,8 @@ class OnPolicyRunner:
         saved_dict["infos"] = infos
         torch.save(saved_dict, path)
         # Upload model to external logging services
-        self.logger.save_model(path, self.current_learning_iteration)
+        if self.cfg.get("upload_model", True):
+            self.logger.save_model(path, self.current_learning_iteration)
 
     def load(
         self, path: str, load_cfg: dict | None = None, strict: bool = True, map_location: str | None = None
