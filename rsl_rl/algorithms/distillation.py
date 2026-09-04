@@ -107,17 +107,26 @@ class Distillation:
         """Sample actions and store transition data."""
         # Compute the actions
         self.transition.actions = self.student(obs, stochastic_output=True).detach()
-        self.transition.privileged_actions = self.teacher(obs).detach()
+        self.transition.distillation_target = self.teacher_target(obs).detach()
         # Record the observations
         self.transition.observations = obs
         return self.transition.actions  # type: ignore
+
+    def teacher_target(self, obs: TensorDict) -> torch.Tensor:
+        """Return the teacher value that the student should match."""
+        return self.teacher(obs)
+
+    def student_prediction(self, obs: TensorDict) -> torch.Tensor:
+        """Return the student value used for the distillation loss."""
+        return self.student(obs)
 
     def process_env_step(
         self, obs: TensorDict, rewards: torch.Tensor, dones: torch.Tensor, extras: dict[str, torch.Tensor]
     ) -> None:
         """Record one environment step and update the normalizers."""
         # Update the normalizers
-        self.student.update_normalization(obs)
+        if self.student.training:
+            self.student.update_normalization(obs)
         # Record the rewards and dones
         self.transition.rewards = rewards
         self.transition.dones = dones
@@ -145,10 +154,10 @@ class Distillation:
             self.student.detach_hidden_state()
             for batch in self.storage.generator():
                 # Inference of the student for gradient computation
-                actions = self.student(batch.observations)
+                prediction = self.student_prediction(batch.observations)
 
                 # Behavior cloning loss
-                behavior_loss = self.loss_fn(actions, batch.privileged_actions)
+                behavior_loss = self.loss_fn(prediction, batch.distillation_target)
 
                 # Total loss
                 loss = loss + behavior_loss

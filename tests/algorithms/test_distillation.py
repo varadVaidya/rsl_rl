@@ -10,6 +10,7 @@ from __future__ import annotations
 import torch
 import warnings
 from tensordict import TensorDict
+from unittest.mock import Mock
 
 import pytest
 
@@ -24,17 +25,45 @@ OBS_DIM = 8
 NUM_ACTIONS = 4
 
 
-def _make_distillation_setup(gradient_length: int = 3, num_learning_epochs: int = 1) -> tuple:
+class LatentDistillation(Distillation):
+    """Exercise the generic target/prediction seam with a non-action target."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        """Initialize hook call counters."""
+        super().__init__(*args, **kwargs)
+        self.target_calls = 0
+        self.prediction_calls = 0
+
+    def teacher_target(self, obs: TensorDict) -> torch.Tensor:
+        """Produce a latent-sized teacher target."""
+        self.target_calls += 1
+        return torch.ones(obs.batch_size[0], 6, device=obs.device)
+
+    def student_prediction(self, obs: TensorDict) -> torch.Tensor:
+        """Produce the matching latent-sized student prediction."""
+        self.prediction_calls += 1
+        prediction = self.student(obs)
+        return torch.cat((prediction, prediction[..., :2]), dim=-1)
+
+
+def _make_distillation_setup(
+    gradient_length: int = 3,
+    num_learning_epochs: int = 1,
+    algorithm_class: type[Distillation] = Distillation,
+    obs_normalization: bool = False,
+) -> tuple:
     """Build a Distillation instance with small networks."""
     obs = make_obs(NUM_ENVS, OBS_DIM)
     obs_groups = {"student": ["policy"], "teacher": ["policy"]}
 
-    student = MLPModel(obs, obs_groups, "student", NUM_ACTIONS, hidden_dims=[32, 32])
+    student = MLPModel(
+        obs, obs_groups, "student", NUM_ACTIONS, hidden_dims=[32, 32], obs_normalization=obs_normalization
+    )
     teacher = MLPModel(obs, obs_groups, "teacher", NUM_ACTIONS, hidden_dims=[32, 32])
 
     storage = RolloutStorage("distillation", NUM_ENVS, NUM_STEPS, obs, [NUM_ACTIONS])
 
-    alg = Distillation(
+    alg = algorithm_class(
         student,
         teacher,
         storage,
@@ -52,7 +81,7 @@ def _fill_distillation_storage(alg: Distillation, obs: TensorDict) -> None:
         t.observations = obs
         t.hidden_states = (None, None)
         t.actions = alg.student(obs).detach()
-        t.privileged_actions = alg.teacher(obs).detach()
+        t.distillation_target = alg.teacher_target(obs).detach()
         t.rewards = torch.randn(NUM_ENVS)
         t.dones = torch.zeros(NUM_ENVS)
         alg.storage.add_transition(t)
@@ -115,6 +144,34 @@ class TestDistillationLoss:
 
         for name, p in alg.teacher.named_parameters():
             assert torch.equal(p, teacher_before[name]), f"Teacher parameter {name} changed during student update"
+
+    def test_custom_targets_and_predictions_need_not_match_action_shape(self) -> None:
+        """Subclasses can distill arbitrary targets while collection still emits actions."""
+        alg, obs, storage = _make_distillation_setup(gradient_length=NUM_STEPS, algorithm_class=LatentDistillation)
+        alg.train_mode()
+
+        for _ in range(NUM_STEPS):
+            actions = alg.act(obs)
+            assert actions.shape == (NUM_ENVS, NUM_ACTIONS)
+            alg.process_env_step(obs, torch.zeros(NUM_ENVS), torch.zeros(NUM_ENVS), {})
+
+        assert storage.distillation_target is not None
+        assert storage.distillation_target.shape == (NUM_STEPS, NUM_ENVS, 6)
+        alg.update()
+        assert alg.target_calls == NUM_STEPS
+        assert alg.prediction_calls == NUM_STEPS
+
+    def test_eval_student_does_not_update_normalization_during_collection(self) -> None:
+        """Frozen/eval students keep collection from invoking normalization updates."""
+        alg, obs, _storage = _make_distillation_setup(obs_normalization=True)
+        update_normalization = Mock(wraps=alg.student.update_normalization)
+        alg.student.update_normalization = update_normalization
+        alg.eval_mode()
+
+        alg.act(obs)
+        alg.process_env_step(obs, torch.zeros(NUM_ENVS), torch.zeros(NUM_ENVS), {})
+
+        update_normalization.assert_not_called()
 
 
 class TestGradientBudgetWarning:

@@ -238,6 +238,38 @@ class TestRecurrentMiniBatchGenerator:
 class TestDistillationStorage:
     """Tests for distillation-mode storage."""
 
+    def test_targets_are_lazy_and_independent_of_action_shape(self) -> None:
+        """Distillation targets may carry arbitrary per-environment dimensions."""
+        obs = make_obs(NUM_ENVS, OBS_DIM)
+        storage = RolloutStorage("distillation", NUM_ENVS, NUM_STEPS, obs, [NUM_ACTIONS])
+        target = torch.randn(NUM_ENVS, 2, 5)
+
+        t = RolloutStorage.Transition()
+        t.observations = obs
+        t.actions = torch.randn(NUM_ENVS, NUM_ACTIONS)
+        t.distillation_target = target
+        t.rewards = torch.zeros(NUM_ENVS)
+        t.dones = torch.zeros(NUM_ENVS)
+        storage.add_transition(t)
+
+        assert storage.distillation_target is not None
+        assert storage.distillation_target.shape == (NUM_STEPS, NUM_ENVS, 2, 5)
+        assert torch.equal(storage.distillation_target[0], target)
+
+    def test_target_requires_one_value_per_environment(self) -> None:
+        """Distillation targets stay aligned with the environment batch."""
+        obs = make_obs(NUM_ENVS, OBS_DIM)
+        storage = RolloutStorage("distillation", NUM_ENVS, NUM_STEPS, obs, [NUM_ACTIONS])
+        t = RolloutStorage.Transition()
+        t.observations = obs
+        t.actions = torch.randn(NUM_ENVS, NUM_ACTIONS)
+        t.distillation_target = torch.randn(NUM_ENVS - 1, 5)
+        t.rewards = torch.zeros(NUM_ENVS)
+        t.dones = torch.zeros(NUM_ENVS)
+
+        with pytest.raises(ValueError, match=f"leading dimension {NUM_ENVS}"):
+            storage.add_transition(t)
+
     def test_generator_yields_per_timestep_batches(self) -> None:
         """Distillation generator should yield one batch per timestep."""
         obs = make_obs(NUM_ENVS, OBS_DIM)
@@ -248,7 +280,7 @@ class TestDistillationStorage:
             t.observations = obs
             t.hidden_states = (None, None)
             t.actions = torch.randn(NUM_ENVS, NUM_ACTIONS)
-            t.privileged_actions = torch.randn(NUM_ENVS, NUM_ACTIONS)
+            t.distillation_target = torch.randn(NUM_ENVS, NUM_ACTIONS)
             t.rewards = torch.randn(NUM_ENVS)
             t.dones = torch.zeros(NUM_ENVS)
             storage.add_transition(t)

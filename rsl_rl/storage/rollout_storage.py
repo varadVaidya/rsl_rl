@@ -53,8 +53,8 @@ class RolloutStorage:
             """Parameters of the action distribution (RL only)."""
 
             # For distillation
-            self.privileged_actions: torch.Tensor | None = None
-            """Privileged (teacher) actions (distillation only)."""
+            self.distillation_target: torch.Tensor | None = None
+            """Teacher target (distillation only)."""
 
             # For recurrent networks
             self.hidden_states: tuple[HiddenState, HiddenState] = (None, None)
@@ -82,7 +82,7 @@ class RolloutStorage:
             old_distribution_params: tuple[torch.Tensor, ...] | None = None,
             hidden_states: tuple[HiddenState, HiddenState] = (None, None),
             masks: torch.Tensor | None = None,
-            privileged_actions: torch.Tensor | None = None,
+            distillation_target: torch.Tensor | None = None,
             dones: torch.Tensor | None = None,
         ) -> None:
             """Initialize a batch container over rollout data."""
@@ -109,8 +109,8 @@ class RolloutStorage:
             """Batch of parameters of the old action distribution (RL only)."""
 
             # For distillation
-            self.privileged_actions: torch.Tensor | None = privileged_actions
-            """Batch of privileged (teacher) actions (distillation only)."""
+            self.distillation_target: torch.Tensor | None = distillation_target
+            """Batch of teacher targets (distillation only)."""
 
             self.dones: torch.Tensor | None = dones
             """Batch of done flags (distillation only)."""
@@ -153,7 +153,7 @@ class RolloutStorage:
 
         # For distillation
         if training_type == "distillation":
-            self.privileged_actions = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
+            self.distillation_target: torch.Tensor | None = None
 
         # For reinforcement learning
         if training_type == "rl":
@@ -184,7 +184,18 @@ class RolloutStorage:
 
         # For distillation
         if self.training_type == "distillation":
-            self.privileged_actions[self.step].copy_(transition.privileged_actions)  # type: ignore
+            target = transition.distillation_target
+            if target is None:
+                raise ValueError("Distillation transitions require a distillation target.")
+            if target.ndim == 0 or target.shape[0] != self.num_envs:
+                raise ValueError(
+                    f"Distillation target must have leading dimension {self.num_envs}, got shape {tuple(target.shape)}."
+                )
+            if self.distillation_target is None:
+                self.distillation_target = torch.zeros(
+                    self.num_transitions_per_env, *target.shape, dtype=target.dtype, device=self.device
+                )
+            self.distillation_target[self.step].copy_(target)
 
         # For reinforcement learning
         if self.training_type == "rl":
@@ -213,11 +224,13 @@ class RolloutStorage:
         """Yield per-timestep batches for distillation training."""
         if self.training_type != "distillation":
             raise ValueError("This function is only available for distillation training.")
+        if self.distillation_target is None:
+            raise ValueError("No distillation targets have been stored.")
 
         for i in range(self.num_transitions_per_env):
             yield RolloutStorage.Batch(
                 observations=self.observations[i],  # type: ignore
-                privileged_actions=self.privileged_actions[i],
+                distillation_target=self.distillation_target[i],
                 dones=self.dones[i],
             )
 
