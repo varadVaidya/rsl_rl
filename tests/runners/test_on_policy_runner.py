@@ -26,7 +26,7 @@ IMG_C, IMG_H, IMG_W = 1, 16, 16
 class DummyEnv(VecEnv):
     """Minimal VecEnv that returns random observations and rewards."""
 
-    def __init__(self, device: str = "cpu", include_image: bool = False) -> None:  # noqa: D107
+    def __init__(self, device: str = "cpu", include_image: bool = False) -> None:  # ruff: ignore[undocumented-public-init]
         self.num_envs = NUM_ENVS
         self.num_actions = NUM_ACTIONS
         self.max_episode_length = MAX_EP_LEN
@@ -35,13 +35,13 @@ class DummyEnv(VecEnv):
         self.cfg = {}
         self._include_image = include_image
 
-    def get_observations(self) -> TensorDict:  # noqa: D102
+    def get_observations(self) -> TensorDict:  # ruff: ignore[undocumented-public-method]
         data: dict = {"policy": torch.randn(self.num_envs, OBS_DIM, device=self.device)}
         if self._include_image:
             data["image"] = torch.randn(self.num_envs, IMG_C, IMG_H, IMG_W, device=self.device)
         return TensorDict(data, batch_size=[self.num_envs], device=self.device)
 
-    def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:  # noqa: D102
+    def step(self, actions: torch.Tensor) -> tuple[TensorDict, torch.Tensor, torch.Tensor, dict]:  # ruff: ignore[undocumented-public-method]
         self.episode_length_buf += 1
         dones = (self.episode_length_buf >= self.max_episode_length).float()
         self.episode_length_buf[dones.bool()] = 0
@@ -245,7 +245,7 @@ class TestSaveLoad:
                 assert torch.equal(saved_actor[key], param), f"Parameter '{key}' not restored after load"
 
     def test_load_restores_iteration(self) -> None:
-        """Loading a checkpoint should restore the iteration counter."""
+        """Loading a checkpoint should resume after its completed iteration."""
         runner = _build_runner()
         runner.learn(num_learning_iterations=3)
 
@@ -257,7 +257,7 @@ class TestSaveLoad:
             assert runner.current_learning_iteration != saved_iter
 
             runner.load(f.name)
-            assert runner.current_learning_iteration == saved_iter
+            assert runner.current_learning_iteration == saved_iter + 1
 
     def test_load_restores_normalization_stats(self) -> None:
         """Running-mean stats should be identical after save and load."""

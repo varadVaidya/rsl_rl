@@ -161,7 +161,9 @@ class OnPolicyRunner:
         loaded_dict = torch.load(path, weights_only=False, map_location=map_location)
         load_iteration = self.alg.load(loaded_dict, load_cfg, strict)
         if load_iteration:
-            self.current_learning_iteration = loaded_dict["iter"]
+            # Checkpoints store the last completed iteration. Resume at the
+            # following one so an interrupted run never repeats an update.
+            self.current_learning_iteration = loaded_dict["iter"] + 1
         infos = loaded_dict["infos"]
         if infos and (env_state := infos.get("env_state")) is not None:
             self.load_env_state(env_state)
