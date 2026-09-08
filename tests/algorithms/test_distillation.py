@@ -161,6 +161,20 @@ class TestDistillationLoss:
         assert alg.target_calls == NUM_STEPS
         assert alg.prediction_calls == NUM_STEPS
 
+    def test_update_accepts_targets_collected_in_inference_mode(self) -> None:
+        """The rollout loop's inference mode must not leak into the training buffer."""
+        alg, obs, storage = _make_distillation_setup(gradient_length=NUM_STEPS)
+        alg.train_mode()
+
+        with torch.inference_mode():
+            for _ in range(NUM_STEPS):
+                alg.act(obs)
+                alg.process_env_step(obs, torch.zeros(NUM_ENVS), torch.zeros(NUM_ENVS), {})
+
+        assert storage.distillation_target is not None
+        assert not storage.distillation_target.is_inference()
+        alg.update()
+
     def test_eval_student_does_not_update_normalization_during_collection(self) -> None:
         """Frozen/eval students keep collection from invoking normalization updates."""
         alg, obs, _storage = _make_distillation_setup(obs_normalization=True)

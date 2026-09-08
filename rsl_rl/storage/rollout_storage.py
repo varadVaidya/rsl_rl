@@ -192,9 +192,12 @@ class RolloutStorage:
                     f"Distillation target must have leading dimension {self.num_envs}, got shape {tuple(target.shape)}."
                 )
             if self.distillation_target is None:
-                self.distillation_target = torch.zeros(
-                    self.num_transitions_per_env, *target.shape, dtype=target.dtype, device=self.device
-                )
+                # Collection runs under inference mode, but this buffer is later
+                # consumed by autograd when computing the distillation loss.
+                with torch.inference_mode(False):
+                    self.distillation_target = torch.zeros(
+                        self.num_transitions_per_env, *target.shape, dtype=target.dtype, device=self.device
+                    )
             self.distillation_target[self.step].copy_(target)
 
         # For reinforcement learning
