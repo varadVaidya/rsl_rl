@@ -80,7 +80,6 @@ class WandbLogWriter(SummaryWriter, LogWriter):
                 notes=notes,
                 dir=wandb_dir,
                 config={"log_dir": log_dir},
-                settings=wandb.Settings(start_method="thread"),
             )
 
         if self.metric_namespace:
