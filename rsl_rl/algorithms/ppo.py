@@ -191,6 +191,12 @@ class PPO:
         mean_value_loss = 0
         mean_surrogate_loss = 0
         mean_entropy = 0
+        mean_kl = 0
+        mean_clip_fraction = 0
+        mean_actor_grad_norm = 0
+        mean_critic_grad_norm = 0
+        # Explained variance of the rollout values w.r.t. the returns (before the update changes the critic)
+        explained_variance = 1 - (self.storage.returns - self.storage.values).var() / self.storage.returns.var()
         # RND loss
         mean_rnd_loss = 0 if self.rnd else None
         # Symmetry loss
@@ -230,11 +236,11 @@ class PPO:
             entropy = self.actor.output_entropy[:original_batch_size]
 
             # Compute KL divergence and adapt the learning rate
+            with torch.inference_mode():
+                kl = self.actor.get_kl_divergence(batch.old_distribution_params, distribution_params)  # type: ignore
+                kl_mean = torch.mean(kl)
             if self.desired_kl is not None and self.schedule == "adaptive":
                 with torch.inference_mode():
-                    kl = self.actor.get_kl_divergence(batch.old_distribution_params, distribution_params)  # type: ignore
-                    kl_mean = torch.mean(kl)
-
                     # Reduce the KL divergence across all GPUs
                     if self.is_multi_gpu:
                         torch.distributed.all_reduce(kl_mean, op=torch.distributed.ReduceOp.SUM)
@@ -298,8 +304,8 @@ class PPO:
                 self.reduce_parameters()
 
             # Apply the gradients for PPO
-            nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
-            nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
+            actor_grad_norm = nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
+            critic_grad_norm = nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
             self.optimizer.step()
             # Apply the gradients for RND
             if self.rnd:
@@ -309,6 +315,10 @@ class PPO:
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
             mean_entropy += entropy.mean().item()
+            mean_kl += kl_mean.item()
+            mean_clip_fraction += ((ratio - 1.0).abs() > self.clip_param).float().mean().item()
+            mean_actor_grad_norm += actor_grad_norm.item()
+            mean_critic_grad_norm += critic_grad_norm.item()
             # RND loss
             if mean_rnd_loss is not None:
                 mean_rnd_loss += rnd_loss.item()
@@ -331,6 +341,12 @@ class PPO:
             "value": mean_value_loss,
             "surrogate": mean_surrogate_loss,
             "entropy": mean_entropy,
+            # Keys with a "/" are logged under their own namespace instead of "Loss/"
+            "Policy/kl": mean_kl / num_updates,
+            "Policy/clip_fraction": mean_clip_fraction / num_updates,
+            "Policy/grad_norm": mean_actor_grad_norm / num_updates,
+            "Critic/explained_variance": explained_variance.item(),
+            "Critic/grad_norm": mean_critic_grad_norm / num_updates,
         }
         if self.rnd:
             loss_dict["rnd"] = mean_rnd_loss
