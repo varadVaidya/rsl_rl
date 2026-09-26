@@ -32,7 +32,7 @@ class WandbLogWriter(SummaryWriter, LogWriter):
         notes: str | None = None,
         entity: str | None = None,
         wandb_dir: str | None = None,
-        metric_namespace: str | None = None,
+        phase: str | None = None,
         base_path: str | None = None,
     ) -> None:
         """Initialize a W&B run for logging.
@@ -50,22 +50,28 @@ class WandbLogWriter(SummaryWriter, LogWriter):
                 ``$WANDB_USERNAME`` when ``None``.
             wandb_dir: Directory for W&B's own local run files (``wandb.init(dir=...)``).
                 Independent of ``log_dir``.
-            metric_namespace: Optional prefix for every metric and config key.
+            phase: Pipeline phase sharing the run. Inserted after the metric category
+                (``Loss/value`` -> ``Loss/<phase>/value``) and prefixed to config keys.
             base_path: Root preserved when checkpoint and file paths are uploaded.
+
+        Every metric is plotted against ``iteration`` (per phase, starting at 0);
+        ``env_steps`` is logged alongside so the W&B x-axis can switch to it.
         """
         if wandb is None:
             raise ModuleNotFoundError("wandb package is required to log to Weights and Biases.")
         super().__init__(log_dir, flush_secs=10)
 
         self._owns_run = wandb.run is None
-        self.metric_namespace = metric_namespace.rstrip("/") if metric_namespace else None
+        self.phase = phase
         self.base_path = base_path
+        # One W&B history row per iteration, committed by flush().
+        self._row: dict = {}
 
         if not self._owns_run:
             # A run was already started by the caller (e.g. a training launcher that needs
             # the generated run name to build ``log_dir`` before the runner exists). Reuse
             # it rather than starting a second run; just record the resolved log_dir.
-            key = f"{self.metric_namespace}/log_dir" if self.metric_namespace else "log_dir"
+            key = f"{self.phase}/log_dir" if self.phase else "log_dir"
             wandb.config.update({key: log_dir}, allow_val_change=True)
         else:
             if entity is None:
@@ -82,10 +88,9 @@ class WandbLogWriter(SummaryWriter, LogWriter):
                 config={"log_dir": log_dir},
             )
 
-        if self.metric_namespace:
-            step_metric = f"{self.metric_namespace}/iteration"
-            wandb.define_metric(step_metric)
-            wandb.define_metric(f"{self.metric_namespace}/*", step_metric=step_metric)
+        # Phases restart at iteration 0, so W&B's monotonic _step cannot be the x-axis.
+        wandb.define_metric("iteration")
+        wandb.define_metric("*", step_metric="iteration")
 
         # Initialize set to keep track of logged videos
         self.logged_videos: set[str] = set()
@@ -98,31 +103,27 @@ class WandbLogWriter(SummaryWriter, LogWriter):
         walltime: float | None = None,
         new_style: bool = False,
     ) -> None:
-        """Log a scalar to both TensorBoard and W&B."""
+        """Log a scalar to TensorBoard and queue it for this iteration's W&B row."""
         super().add_scalar(tag, scalar_value, global_step=global_step, walltime=walltime, new_style=new_style)
-        if self.metric_namespace:
-            wandb.log({
-                f"{self.metric_namespace}/{tag}": scalar_value,
-                f"{self.metric_namespace}/iteration": global_step,
-            })
-        else:
-            wandb.log({tag: scalar_value}, step=global_step)
+        self._row[self._key(tag)] = scalar_value
+        self._row["iteration"] = global_step
+
+    def flush(self) -> None:
+        """Commit the queued metrics as one W&B row."""
+        super().flush()
+        if self._row:
+            wandb.log(self._row)
+            self._row = {}
 
     def store_config(self, env_cfg: dict | object, train_cfg: dict) -> None:
         """Upload environment and training configuration to W&B."""
-        prefix = f"{self.metric_namespace}/" if self.metric_namespace else ""
-        allow_change = self.metric_namespace is not None
-        wandb.config.update({f"{prefix}train_cfg": train_cfg}, allow_val_change=allow_change)
+        prefix = f"{self.phase}/" if self.phase else ""
+        # A resumed run re-uploads its config with a different max_iterations.
+        wandb.config.update({f"{prefix}train_cfg": train_cfg}, allow_val_change=True)
         try:
-            wandb.config.update(
-                {f"{prefix}env_cfg": env_cfg.to_dict()},  # type: ignore
-                allow_val_change=allow_change,
-            )
+            wandb.config.update({f"{prefix}env_cfg": env_cfg.to_dict()}, allow_val_change=True)  # type: ignore
         except Exception:
-            wandb.config.update(
-                {f"{prefix}env_cfg": asdict(env_cfg)},  # type: ignore
-                allow_val_change=allow_change,
-            )
+            wandb.config.update({f"{prefix}env_cfg": asdict(env_cfg)}, allow_val_change=True)  # type: ignore
 
     def save_model(self, model_path: str, it: int) -> None:
         """Upload a model checkpoint artifact to W&B."""
@@ -133,19 +134,22 @@ class WandbLogWriter(SummaryWriter, LogWriter):
         wandb.save(path, base_path=self.base_path or os.path.dirname(path))
 
     def save_video(self, video: pathlib.Path, it: int) -> None:
-        """Upload a video artifact once per filename to W&B."""
+        """Queue a video once per filename for this iteration's W&B row."""
         if video.name not in self.logged_videos:
-            tag = f"{self.metric_namespace}/video" if self.metric_namespace else "video"
-            metrics = {tag: wandb.Video(str(video), format="mp4")}
-            if self.metric_namespace:
-                metrics[f"{self.metric_namespace}/iteration"] = it
-                wandb.log(metrics)
-            else:
-                wandb.log(metrics, step=it)
+            self._row[self._key("video")] = wandb.Video(str(video), format="mp4")
+            self._row["iteration"] = it
             self.logged_videos.add(video.name)
 
     def stop(self) -> None:
         """Close this writer and finish only runs that it created."""
+        self.flush()
         super().close()
         if self._owns_run:
             wandb.finish()
+
+    def _key(self, tag: str) -> str:
+        # env_steps is an x-axis shared by every phase, like iteration.
+        if not self.phase or tag == "env_steps":
+            return tag
+        category, _, name = tag.partition("/")
+        return f"{category}/{self.phase}/{name}" if name else f"{category}/{self.phase}"

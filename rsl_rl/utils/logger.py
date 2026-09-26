@@ -215,6 +215,8 @@ class Logger:
             self.writer.add_scalar("Perf/total_fps", fps, it)
             self.writer.add_scalar("Perf/collection_time", collect_time, it)
             self.writer.add_scalar("Perf/learning_time", learn_time, it)
+            # Derived from the iteration so it survives resumes, unlike tot_timesteps.
+            self.writer.add_scalar("env_steps", (it + 1) * collection_size, it)
 
             # Log rewards and episode length
             if len(self.rewbuffer) > 0:
@@ -283,6 +285,9 @@ class Logger:
             if isinstance(self.writer, LogWriter):
                 for video in pathlib.Path(self.log_dir).rglob("*.mp4"):  # type: ignore
                     self.writer.save_video(video, it)
+
+            # Commit this iteration's metrics as one row
+            self.writer.flush()
 
             # Clear extras buffer
             self.ep_extras.clear()

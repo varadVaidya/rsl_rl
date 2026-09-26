@@ -39,5 +39,8 @@ class LogWriter(ABC):
     def save_video(self, video: pathlib.Path, it: int) -> None:
         """Upload a video file."""
 
+    def flush(self) -> None:
+        """Commit the metrics logged for the current iteration. Called once per iteration."""
+
     def stop(self) -> None:
         """Finalize and close the logging run."""
