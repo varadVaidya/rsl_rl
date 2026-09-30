@@ -7,6 +7,7 @@
 
 from .cnn import CNN
 from .distribution import BetaDistribution, Distribution, GaussianDistribution, HeteroscedasticGaussianDistribution
+from .flash_sac import FlashSACActor, FlashSACDoubleCritic, FlashSACTemperature
 from .mlp import MLP
 from .normalization import EmpiricalDiscountedVariationNormalization, EmpiricalNormalization
 from .rnn import RNN, HiddenState
@@ -20,6 +21,9 @@ __all__ = [
     "EmpiricalDiscountedVariationNormalization",
     "EmpiricalNormalization",
     "GaussianDistribution",
+    "FlashSACActor",
+    "FlashSACDoubleCritic",
+    "FlashSACTemperature",
     "HeteroscedasticGaussianDistribution",
     "HiddenState",
 ]
