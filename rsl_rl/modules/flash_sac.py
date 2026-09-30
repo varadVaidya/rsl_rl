@@ -170,6 +170,7 @@ class EnsembleUnitBatchNorm(nn.Module):
         self.momentum = momentum
 
     def forward(self, x: torch.Tensor, training: bool) -> torch.Tensor:
+        x = x.float()
         if training:
             mean = x.mean(dim=1, keepdim=True)
             var = x.var(dim=1, correction=0, keepdim=True)
@@ -202,6 +203,7 @@ class EnsembleRMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(num_ensemble, input_dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.float()
         rms = torch.sqrt(torch.mean(x.square(), dim=-1, keepdim=True) + 1e-6)
         return x / rms * self.weight.unsqueeze(1)
 
@@ -287,4 +289,3 @@ def normalize_parameters(module: nn.Module) -> None:
 @torch.no_grad()
 def update_ema(target: nn.Module, source: nn.Module, tau: float) -> None:
     torch._foreach_lerp_(list(target.parameters()), list(source.parameters()), tau)
-
