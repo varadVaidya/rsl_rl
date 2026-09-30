@@ -66,8 +66,8 @@ class ReplayBuffer:
         self.observations[indices] = first["observation"]
         self.actions[indices] = first["action"]
         self.rewards[indices] = reward
-        self.terminated[indices] = terminated
-        self.truncated[indices] = truncated
+        self.terminated[indices] = terminated.to(self.terminated.dtype)
+        self.truncated[indices] = truncated.to(self.truncated.dtype)
         self.next_observations[indices] = next_observation
         self.length = min(self.length + count, self.max_length)
         self.index = (self.index + count) % self.max_length
@@ -108,4 +108,3 @@ class ReplayBuffer:
         self.length = length
         self.index = int(state["index"])
         self.pending.clear()
-
