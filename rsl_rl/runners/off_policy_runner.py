@@ -68,7 +68,8 @@ class OffPolicyRunner(OnPolicyRunner):
                 step_extras = _copy_extras(extras)
                 done_ids = dones.nonzero(as_tuple=False).squeeze(-1)
                 if len(done_ids) > 0:
-                    obs, reset_extras = self.reset_done(next_obs, done_ids)
+                    with torch.inference_mode():
+                        obs, reset_extras = self.reset_done(next_obs, done_ids)
                     step_extras = _merge_extras(step_extras, reset_extras)
                 else:
                     obs = next_obs
